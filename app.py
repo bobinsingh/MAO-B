@@ -12,69 +12,100 @@ def desc_calc():
     bashCommand = "java -Xms2G -Xmx2G -Djava.awt.headless=true -jar ./PaDEL-Descriptor/PaDEL-Descriptor.jar -removesalt -standardizenitro -fingerprints -descriptortypes ./PaDEL-Descriptor/PubchemFingerprinter.xml -dir ./ -file descriptors_output.csv"
     process = subprocess.Popen(bashCommand.split(), stdout=subprocess.PIPE)
     output, error = process.communicate()
-    os.remove('molecule.smi')
+    if error:
+        st.error("Error occurred while calculating descriptors!")
+    else:
+        os.remove('molecule.smi')
 
-# File download
+# File download link generator
 def filedownload(df):
     csv = df.to_csv(index=False)
     b64 = base64.b64encode(csv.encode()).decode()  # strings <-> bytes conversions
     href = f'<a href="data:file/csv;base64,{b64}" download="prediction.csv">Download Predictions</a>'
     return href
 
-# Model building
+# Model building and prediction
 def build_model(input_data):
-    # Reads in saved regression model
-    load_model = pickle.load(open('monoamine_oxidase_bioactivity_model.pkl', 'rb'))
-    # Apply model to make predictions
-    prediction = load_model.predict(input_data)
-    st.header('**Prediction output**')
-    prediction_output = pd.Series(prediction, name='pIC50')
-    molecule_name = pd.Series(load_data[1], name='molecule_name')
-    df = pd.concat([molecule_name, prediction_output], axis=1)
-    st.write(df)
-    st.markdown(filedownload(df), unsafe_allow_html=True)
+    try:
+        # Load the saved regression model
+        load_model = pickle.load(open('monoamine_oxidase_bioactivity_model.pkl', 'rb'))
+        
+        # Apply model to make predictions
+        prediction = load_model.predict(input_data)
+        st.header('**Prediction output**')
+        
+        # Prepare results for output
+        prediction_output = pd.Series(prediction, name='pIC50')
+        molecule_name = pd.Series(load_data[1], name='molecule_name')
+        df = pd.concat([molecule_name, prediction_output], axis=1)
+        
+        # Display and offer file download
+        st.write(df)
+        st.markdown(filedownload(df), unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f"Error in model prediction: {e}")
 
 # Logo image
 image = Image.open('logo.png')
-
 st.image(image, use_column_width=True)
 
-# Page title
+# Page title and description
 st.markdown("""
 # Bioactivity Prediction App (Monoamine Oxidase-B)
 
-This app allows you to predict the bioactivity towards inhibting the `Monoamine Oxidase-B` enzyme. `Monoamine Oxidase-B` is a drug target for various Neurological Disorders like Parkinson's, Alzheimer's, etc.
-
+This app allows you to predict the bioactivity towards inhibiting the `Monoamine Oxidase-B` enzyme. 
+`Monoamine Oxidase-B` is a drug target for various Neurological Disorders like Parkinson's, Alzheimer's, etc.
 """)
 
-# Sidebar
-with st.sidebar.header('1. Upload your CSV data'):
+# Sidebar for file upload
+with st.sidebar.header('1. Upload your TXT data'):
     uploaded_file = st.sidebar.file_uploader("Upload your input file", type=['txt'])
 
 if st.sidebar.button('Predict'):
-    load_data = pd.read_table(uploaded_file, sep=' ', header=None)
-    load_data.to_csv('molecule.smi', sep = '\t', header = False, index = False)
+    # Ensure a file has been uploaded
+    if uploaded_file is not None:
+        try:
+            # Read input file (SMILES and names)
+            load_data = pd.read_table(uploaded_file, sep='\t', header=None)
+            
+            # Save the input for descriptor calculation
+            load_data.to_csv('molecule.smi', sep='\t', header=False, index=False)
+            
+            # Display input data
+            st.header('**Original input data**')
+            st.write(load_data)
 
-    st.header('**Original input data**')
-    st.write(load_data)
+            # Calculate molecular descriptors
+            with st.spinner("Calculating descriptors..."):
+                desc_calc()
 
-    with st.spinner("Calculating descriptors..."):
-        desc_calc()
+            # Read calculated descriptors
+            st.header('**Calculated molecular descriptors**')
+            desc = pd.read_csv('descriptors_output.csv')
+            st.write(desc)
+            st.write(f"Shape of calculated descriptors: {desc.shape}")
 
-    # Read in calculated descriptors and display the dataframe
-    st.header('**Calculated molecular descriptors**')
-    desc = pd.read_csv('descriptors_output.csv')
-    st.write(desc)
-    st.write(desc.shape)
+            # Load list of descriptor columns used in the model
+            st.header('**Subset of descriptors from previously built models**')
+            Xlist = list(pd.read_csv('descriptor_list.csv').columns)
 
-    # Read descriptor list used in previously built model
-    st.header('**Subset of descriptors from previously built models**')
-    Xlist = list(pd.read_csv('descriptor_list.csv').columns)
-    desc_subset = desc[Xlist]
-    st.write(desc_subset)
-    st.write(desc_subset.shape)
+            # Subset calculated descriptors
+            if all(col in desc.columns for col in Xlist):
+                desc_subset = desc[Xlist]
+                st.write(desc_subset)
+                st.write(f"Shape of subset descriptors: {desc_subset.shape}")
 
-    # Apply trained model to make prediction on query compounds
-    build_model(desc_subset)
+                # Predict bioactivity with the model
+                build_model(desc_subset)
+            else:
+                st.error("Error: Some required descriptors are missing from the calculated data.")
+        
+        except Exception as e:
+            st.error(f"Error processing file: {e}")
+    else:
+        st.error("Please upload a file before predicting.")
+
 else:
     st.info('Upload input data in the sidebar to start!')
+
+
